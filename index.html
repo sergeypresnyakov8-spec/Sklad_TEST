@@ -42,12 +42,23 @@
 
             // Инициализация камер
             useEffect(() => {
-                Html5Qrcode.getCameras().then(cams => {
-                    if (cams.length > 0) {
-                        const back = cams.find(c => /back|rear|задняя/i.test(c.label));
-                        setCamId(back ? back.id : cams[0].id);
+                const initCams = async () => {
+                    try {
+                        const cams = await Html5Qrcode.getCameras();
+                        if (cams.length > 0) {
+                            // Ищем заднюю камеру
+                            const back = cams.find(c => /back|rear|задняя|environment/i.test(c.label));
+                            setCamId(back ? back.id : cams[0].id);
+                        } else {
+                            setStatus({ type: 'error', msg: 'Камеры не найдены. Проверьте разрешения.' });
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        setStatus({ type: 'error', msg: 'Ошибка доступа к камере. Откройте в новой вкладке.' });
                     }
-                }).catch(() => setStatus({ type: 'error', msg: 'Камера не найдена' }));
+                };
+                
+                initCams();
                 
                 // Инициализация иконок Lucide
                 setTimeout(() => lucide.createIcons(), 100);
@@ -55,8 +66,9 @@
 
             // Запуск/Остановка сканера
             useEffect(() => {
+                let scanner = null;
                 if (isScanning && camId) {
-                    const scanner = new Html5Qrcode("reader");
+                    scanner = new Html5Qrcode("reader");
                     scannerRef.current = scanner;
                     
                     scanner.start(camId, { 
@@ -72,15 +84,35 @@
                         });
                         setStatus({ type: 'success', msg: 'Считано!' });
                     }, 
-                    () => {}).catch(() => setIsScanning(false));
-
-                    return () => {
-                        if (scannerRef.current && scannerRef.current.isScanning) {
-                            scannerRef.current.stop().catch(() => {});
-                        }
-                    };
+                    (errorMessage) => {
+                        // Игнорируем ошибки сканирования кадра
+                    }).catch((err) => {
+                        console.error(err);
+                        setStatus({ type: 'error', msg: 'Не удалось запустить камеру. Попробуйте другую.' });
+                        setIsScanning(false);
+                    });
                 }
+
+                return () => {
+                    if (scanner && scanner.isScanning) {
+                        scanner.stop().catch(e => console.error("Stop error", e));
+                    }
+                };
             }, [isScanning, camId]);
+
+            const switchCamera = async () => {
+                try {
+                    const cams = await Html5Qrcode.getCameras();
+                    if (cams.length > 1) {
+                        const currentIndex = cams.findIndex(c => c.id === camId);
+                        const nextIndex = (currentIndex + 1) % cams.length;
+                        setCamId(cams[nextIndex].id);
+                        setStatus({ type: 'idle', msg: `Камера: ${cams[nextIndex].label || 'Переключена'}` });
+                    }
+                } catch (e) {
+                    setStatus({ type: 'error', msg: 'Не удалось переключить камеру' });
+                }
+            };
 
             const sendData = async () => {
                 if (!items.length) return;
@@ -98,6 +130,10 @@
                 }
             };
 
+            const openInNewTab = () => {
+                window.open(window.location.href, '_blank');
+            };
+
             return (
                 <div className="min-h-screen p-4 pb-32 max-w-md mx-auto">
                     {/* Шапка */}
@@ -107,7 +143,10 @@
                             <h1 className="text-2xl font-black uppercase italic tracking-tighter">BoxLog</h1>
                         </div>
                         <div className="flex gap-4">
-                            <button onClick={() => setItems([])} className="text-zinc-600 active:text-red-500 transition-colors">
+                            <button onClick={openInNewTab} className="text-zinc-600 active:text-blue-500 transition-colors" title="Открыть в новой вкладке">
+                                <i data-lucide="external-link" class="w-6 h-6"></i>
+                            </button>
+                            <button onClick={() => setItems([])} className="text-zinc-600 active:text-red-500 transition-colors" title="Очистить список">
                                 <i data-lucide="trash-2" class="w-6 h-6"></i>
                             </button>
                         </div>
@@ -138,7 +177,15 @@
                                 <div className="absolute inset-0 pointer-events-none border-2 border-blue-500/30 m-8 rounded-xl">
                                     <div className="w-full h-0.5 bg-blue-500/50 animate-scan"></div>
                                 </div>
-                                <button onClick={() => setIsScanning(false)} className="w-full py-4 mt-2 text-zinc-500 font-bold text-xs uppercase tracking-widest">Выключить</button>
+                                <div className="flex gap-2 mt-2">
+                                    <button onClick={switchCamera} className="flex-1 py-4 bg-zinc-700/50 rounded-2xl text-zinc-300 font-bold text-[10px] uppercase tracking-widest flex items-center justify-center gap-2">
+                                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                                        Сменить камеру
+                                    </button>
+                                    <button onClick={() => setIsScanning(false)} className="flex-1 py-4 bg-zinc-700/50 rounded-2xl text-zinc-300 font-bold text-[10px] uppercase tracking-widest">
+                                        Выключить
+                                    </button>
+                                </div>
                             </div>
                         )}
                     </div>
