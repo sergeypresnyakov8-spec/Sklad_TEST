@@ -58,6 +58,10 @@
             const [isScanning, setIsScanning] = useState(false);
             const [status, setStatus] = useState({ type: 'idle', msg: '' });
             const scannerInstance = useRef(null);
+            
+            // Хранилища для предотвращения повторного учета одних и тех же кодов
+            const confirmedCodes = useRef(new Set());
+            const batchCodes = useRef(new Set());
 
             const loadPlan = async () => {
                 setStatus({ type: 'loading', msg: 'Загрузка плана...' });
@@ -66,6 +70,12 @@
                     const data = await response.json();
                     const enrichedProducts = data.products.map(p => ({ ...p, scannedQty: 0, scannedBoxes: 0 }));
                     setPlan({ ...data, products: enrichedProducts });
+                    
+                    // Сброс истории при загрузке нового плана
+                    confirmedCodes.current = new Set();
+                    batchCodes.current = new Set();
+                    setItems([]);
+                    
                     setStatus({ type: 'success', msg: `План на ${data.date} загружен` });
                 } catch (e) {
                     setStatus({ type: 'error', msg: 'Ошибка загрузки плана' });
@@ -112,29 +122,39 @@
                         const onScanSuccess = (text) => {
                             if (!isMounted) return;
                             const decodedText = fixEncoding(text);
+                            
+                            // Проверка: был ли этот код уже отправлен или он уже в текущем списке
+                            if (confirmedCodes.current.has(decodedText)) {
+                                setStatus({ type: 'info', msg: 'Уже отправлено в таблицу' });
+                                return;
+                            }
+                            if (batchCodes.current.has(decodedText)) {
+                                setStatus({ type: 'info', msg: 'Уже в списке' });
+                                return;
+                            }
+
                             const parts = decodedText.split(/\s*[|;]\s*/).map(p => p.trim()).filter(p => p.length > 0);
                             const productName = parts[0];
 
+                            batchCodes.current.add(decodedText);
+
                             setItems(prev => {
-                                if (prev.some(i => i.data === decodedText)) return prev;
-                                
                                 let matched = false;
-                                if (plan) {
-                                    setPlan(currentPlan => {
-                                        const updatedProducts = currentPlan.products.map(p => {
-                                            if (p.name === productName) {
-                                                matched = true;
-                                                return { 
-                                                    ...p, 
-                                                    scannedQty: p.scannedQty + (Number(p.packing) || 0),
-                                                    scannedBoxes: p.scannedBoxes + 1
-                                                };
-                                            }
-                                            return p;
-                                        });
-                                        return { ...currentPlan, products: updatedProducts };
+                                setPlan(currentPlan => {
+                                    if (!currentPlan) return null;
+                                    const updatedProducts = currentPlan.products.map(p => {
+                                        if (p.name === productName) {
+                                            matched = true;
+                                            return { 
+                                                ...p, 
+                                                scannedQty: p.scannedQty + (Number(p.packing) || 0),
+                                                scannedBoxes: p.scannedBoxes + 1
+                                            };
+                                        }
+                                        return p;
                                     });
-                                }
+                                    return { ...currentPlan, products: updatedProducts };
+                                });
 
                                 if (navigator.vibrate) navigator.vibrate(matched ? [100, 50, 100] : 70);
                                 return [{ data: decodedText, time: new Date().toLocaleTimeString(), matched }, ...prev];
@@ -181,9 +201,40 @@
                         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                         body: JSON.stringify(preparedItems)
                     });
+                    
+                    // Переносим коды из текущей пачки в "подтвержденные"
+                    batchCodes.current.forEach(code => confirmedCodes.current.add(code));
+                    batchCodes.current.clear();
+                    
                     setItems([]);
                     setStatus({ type: 'success', msg: 'Данные сохранены!' });
                 } catch (e) { setStatus({ type: 'error', msg: 'Ошибка отправки' }); }
+            };
+
+            const clearQueue = () => {
+                if (!items.length) return;
+                if (plan) {
+                    setPlan(currentPlan => {
+                        const updatedProducts = currentPlan.products.map(p => {
+                            const itemsToSubtract = items.filter(item => {
+                                const parts = item.data.split(/\s*[|;]\s*/).map(p => p.trim()).filter(p => p.length > 0);
+                                return parts[0] === p.name;
+                            });
+                            if (itemsToSubtract.length > 0) {
+                                return {
+                                    ...p,
+                                    scannedQty: Math.max(0, p.scannedQty - (itemsToSubtract.length * (Number(p.packing) || 0))),
+                                    scannedBoxes: Math.max(0, p.scannedBoxes - itemsToSubtract.length)
+                                };
+                            }
+                            return p;
+                        });
+                        return { ...currentPlan, products: updatedProducts };
+                    });
+                }
+                batchCodes.current.clear();
+                setItems([]);
+                setStatus({ type: 'info', msg: 'Очередь очищена' });
             };
 
             const renderItemData = (data) => {
@@ -224,7 +275,7 @@
                                 <button onClick={loadPlan} className="p-3 bg-zinc-800 rounded-2xl text-zinc-400 active:bg-blue-600 active:text-white transition-all">
                                     <Icon name="clock" />
                                 </button>
-                                <button onClick={() => setItems([])} className="p-3 bg-zinc-800 rounded-2xl text-zinc-400 active:bg-red-600 active:text-white transition-all">
+                                <button onClick={clearQueue} className="p-3 bg-zinc-800 rounded-2xl text-zinc-400 active:bg-red-600 active:text-white transition-all">
                                     <Icon name="trash" />
                                 </button>
                             </div>
@@ -239,7 +290,8 @@
                     {status.msg && (
                         <div className={`mb-6 p-4 rounded-2xl text-center text-[10px] font-black uppercase tracking-[0.2em] shadow-xl animate-in fade-in slide-in-from-top-4 ${
                             status.type === 'success' ? 'bg-green-600 shadow-green-900/20' : 
-                            status.type === 'error' ? 'bg-red-600 shadow-red-900/20' : 'bg-blue-600 shadow-blue-900/20'
+                            status.type === 'error' ? 'bg-red-600 shadow-red-900/20' : 
+                            status.type === 'info' ? 'bg-zinc-600 shadow-zinc-900/20' : 'bg-blue-600 shadow-blue-900/20'
                         }`}>{status.msg}</div>
                     )}
 
