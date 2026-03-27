@@ -3,534 +3,188 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#2563eb">
-    <title>Склад-Учет (Мини)</title>
-    
-    <!-- Tailwind CSS via CDN -->
+    <title>BoxLog - Data Matrix Scanner</title>
+    <!-- Подключаем библиотеки через CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Lucide Icons via CDN -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    
-    <!-- HTML5 QR Code Scanner via CDN -->
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-
-    <link rel="manifest" href="manifest.json">
-
     <style>
-        @keyframes scan {
-            0%, 100% { transform: translateY(-4rem); }
-            50% { transform: translateY(4rem); }
-        }
-        .animate-scan {
-            animation: scan 2s ease-in-out infinite;
-        }
-        /* Hide html5-qrcode internal UI */
-        #reader__dashboard, #reader__header_message { display: none !important; }
+        /* Кастомные стили для сканера */
         #reader { border: none !important; }
-        video { border-radius: 1rem; object-fit: cover !important; }
-
-        .success-flash {
-            animation: flash 0.5s ease-out;
-        }
-        @keyframes flash {
-            0% { background-color: rgba(34, 197, 94, 0.5); }
-            100% { background-color: transparent; }
+        #reader video { border-radius: 1rem; object-fit: cover; }
+        #reader__dashboard { display: none !important; }
+        #reader__status_span { display: none !important; }
+        .animate-scan { animation: scan 2s linear infinite; }
+        @keyframes scan {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(200px); }
         }
     </style>
 </head>
-<body class="bg-slate-100 font-sans text-slate-900 h-screen overflow-hidden">
+<body class="bg-zinc-900 text-white font-sans antialiased">
+    <div id="root"></div>
 
-    <div id="app" class="h-full flex flex-col relative">
-        <!-- Scanner View -->
-        <div id="scanner-view" class="flex-1 bg-black relative flex flex-col">
-            <div id="reader" class="flex-1"></div>
-            
-            <!-- Success Flash Overlay -->
-            <div id="flash-overlay" class="absolute inset-0 pointer-events-none z-10"></div>
-            
-            <!-- Scanner Overlay -->
-            <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div class="w-72 h-72 border-2 border-blue-500 rounded-xl relative">
-                    <div class="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-blue-500 -mt-1 -ml-1 rounded-tl-lg"></div>
-                    <div class="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-blue-500 -mt-1 -mr-1 rounded-tr-lg"></div>
-                    <div class="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-blue-500 -mb-1 -ml-1 rounded-bl-lg"></div>
-                    <div class="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-blue-500 -mb-1 -mr-1 rounded-br-lg"></div>
-                    <div class="absolute top-1/2 left-0 right-0 h-0.5 bg-red-500/50 shadow-[0_0_8px_rgba(239,68,68,0.8)] animate-scan"></div>
-                </div>
-            </div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
 
-            <div class="absolute top-10 left-0 right-0 text-center space-y-2">
-                <p class="text-white bg-black/50 inline-block px-4 py-2 rounded-full backdrop-blur-md text-sm">
-                    Наведите на штрихкод
-                </p>
-                <div id="scan-counter" class="hidden">
-                    <p class="text-white bg-blue-600/80 inline-block px-4 py-1 rounded-full backdrop-blur-md text-xs font-bold">
-                        Собрано: <span id="counter-value">0</span>
-                    </p>
-                </div>
-            </div>
+        // ВАША ССЫЛКА НА GOOGLE SCRIPT
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzcje13UROSPJ5Oga_YIFFSTneyo0BYUVdV6crbanrUWFiOMGMqbrXL2Zg9JVU1D83JUg/exec';
 
-            <!-- Zoom Control -->
-            <div id="zoom-container" class="absolute bottom-32 left-0 right-0 px-12 hidden">
-                <div class="bg-black/40 backdrop-blur-md p-3 rounded-2xl flex items-center gap-4">
-                    <i data-lucide="zoom-out" class="text-white w-4 h-4"></i>
-                    <input type="range" id="zoom-range" class="flex-1 accent-blue-500" oninput="handleZoom(this.value)">
-                    <i data-lucide="zoom-in" class="text-white w-4 h-4"></i>
-                </div>
-            </div>
+        function App() {
+            const [items, setItems] = useState([]);
+            const [isScanning, setIsScanning] = useState(false);
+            const [status, setStatus] = useState({ type: 'idle', msg: '' });
+            const [camId, setCamId] = useState(null);
+            const scannerRef = useRef(null);
 
-            <!-- Bottom Controls -->
-            <div class="absolute bottom-10 left-0 right-0 flex justify-center items-center gap-4 px-6">
-                <button id="mass-mode-btn" onclick="toggleMassMode()" class="p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all flex flex-col items-center gap-1">
-                    <i data-lucide="layers" size="24"></i>
-                    <span class="text-[10px] uppercase font-bold">Массово</span>
-                </button>
-                <button id="torch-btn" onclick="toggleTorch()" class="hidden p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all">
-                    <i data-lucide="zap" size="28"></i>
-                </button>
-                <button id="switch-camera-btn" onclick="switchCamera()" class="hidden p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all">
-                    <i data-lucide="refresh-cw" size="28"></i>
-                </button>
-                <button onclick="toggleHistory()" class="p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all">
-                    <i data-lucide="history" size="28"></i>
-                </button>
-                <button onclick="toggleSettings()" class="p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all">
-                    <i data-lucide="settings" size="28"></i>
-                </button>
-            </div>
-        </div>
-
-        <!-- Result View (Hidden by default) -->
-        <div id="result-view" class="hidden absolute inset-0 bg-slate-50 z-20 flex flex-col">
-            <div class="flex-1 p-6 flex flex-col items-center justify-center space-y-8">
-                <div class="w-24 h-24 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4">
-                    <i data-lucide="barcode" size="48"></i>
-                </div>
-                <div class="w-full space-y-2 text-center">
-                    <label class="text-sm font-medium text-slate-500 uppercase tracking-wider">Штрихкод</label>
-                    <input id="scanned-input" type="text" class="w-full p-4 text-center text-2xl font-mono bg-white border border-slate-200 rounded-xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500">
-                </div>
-            </div>
-            <div class="p-6 flex gap-4 bg-white border-t">
-                <button onclick="cancelScan()" class="flex-1 py-4 bg-slate-200 text-slate-700 rounded-xl font-bold active:scale-95 transition-all">Отмена</button>
-                <button onclick="saveToInventory()" class="flex-[2] py-4 bg-blue-600 text-white rounded-xl font-bold active:scale-95 transition-all shadow-lg">Сохранить</button>
-            </div>
-        </div>
-
-        <!-- History Drawer -->
-        <div id="history-drawer" class="fixed inset-0 z-50 bg-white translate-y-full transition-transform duration-300 flex flex-col">
-            <div class="p-4 border-b flex justify-between items-center bg-slate-50">
-                <h2 class="text-xl font-bold flex items-center gap-2">
-                    <i data-lucide="history" class="text-blue-600"></i> История
-                </h2>
-                <div class="flex gap-2">
-                    <button onclick="downloadCSV()" class="p-2 text-blue-500 hover:bg-blue-50 rounded-full" title="Скачать CSV">
-                        <i data-lucide="download"></i>
-                    </button>
-                    <button onclick="clearHistory()" class="p-2 text-red-500 hover:bg-red-50 rounded-full" title="Очистить историю">
-                        <i data-lucide="trash-2"></i>
-                    </button>
-                    <button onclick="toggleHistory()" class="p-2 hover:bg-slate-200 rounded-full"><i data-lucide="x"></i></button>
-                </div>
-            </div>
-            <div id="history-list" class="flex-1 overflow-y-auto p-4 space-y-4">
-                <!-- Items will be injected here -->
-            </div>
-        </div>
-
-        <!-- Settings Drawer -->
-        <div id="settings-drawer" class="fixed inset-0 z-50 bg-white translate-x-full transition-transform duration-300 flex flex-col">
-            <div class="p-4 border-b flex justify-between items-center bg-slate-50">
-                <h2 class="text-xl font-bold flex items-center gap-2">
-                    <i data-lucide="settings" class="text-slate-600"></i> Настройки
-                </h2>
-                <button onclick="toggleSettings()" class="p-2 hover:bg-slate-200 rounded-full"><i data-lucide="x"></i></button>
-            </div>
-            <div class="flex-1 p-6 space-y-6">
-                <div class="space-y-2">
-                    <label class="text-sm font-medium text-slate-500 uppercase tracking-wider">Google Script URL</label>
-                    <input id="script-url-input" type="text" class="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" placeholder="https://script.google.com/macros/s/...">
-                </div>
-                <button onclick="saveSettings()" class="w-full py-4 bg-blue-600 text-white rounded-xl font-bold">Сохранить настройки</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Toast Notification -->
-    <div id="toast" class="fixed top-5 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-full shadow-2xl opacity-0 transition-opacity pointer-events-none z-[100]"></div>
-
-    <script>
-        // --- State ---
-        let inventory = JSON.parse(localStorage.getItem('warehouse_barcode_data') || '[]');
-        let settings = JSON.parse(localStorage.getItem('warehouse_barcode_settings') || '{"googleScriptUrl": "https://script.google.com/macros/s/AKfycby89vxU7RQMNnGJlcVYg3NDIiB2AMvmsRNyf6KuF_fCaZtytMdieOhuh1hs0z6oqgxNbQ/exec"}');
-        let html5QrCode;
-        let isMassMode = false;
-        let lastScannedCode = null;
-        let lastScannedTime = 0;
-        let isTorchOn = false;
-        let currentCameraId = null;
-        let cameras = [];
-
-        // --- Initialization ---
-        window.onload = () => {
-            lucide.createIcons();
-            document.getElementById('script-url-input').value = settings.googleScriptUrl;
-            startScanner();
-            renderHistory();
-            updateCounter();
-        };
-
-        function showToast(message) {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.style.opacity = '1';
-            setTimeout(() => toast.style.opacity = '0', 3000);
-        }
-
-        function updateCounter() {
-            const counter = document.getElementById('scan-counter');
-            const value = document.getElementById('counter-value');
-            if (isMassMode) {
-                counter.classList.remove('hidden');
-                value.textContent = inventory.length;
-            } else {
-                counter.classList.add('hidden');
-            }
-        }
-
-        // --- Scanner Logic ---
-        async function startScanner() {
-            try {
-                cameras = await Html5Qrcode.getCameras();
-                if (cameras && cameras.length > 0) {
-                    // Try to find back camera
-                    const backCamera = cameras.find(c => c.label.toLowerCase().includes('back') || c.label.toLowerCase().includes('rear') || c.label.toLowerCase().includes('0'));
-                    currentCameraId = backCamera ? backCamera.id : cameras[0].id;
-                    
-                    if (cameras.length > 1) {
-                        document.getElementById('switch-camera-btn').classList.remove('hidden');
+            // Инициализация камер
+            useEffect(() => {
+                Html5Qrcode.getCameras().then(cams => {
+                    if (cams.length > 0) {
+                        const back = cams.find(c => /back|rear|задняя/i.test(c.label));
+                        setCamId(back ? back.id : cams[0].id);
                     }
-                    
-                    initScanner(currentCameraId);
-                } else {
-                    showToast('Камеры не найдены');
-                }
-            } catch (err) {
-                console.error("Camera access error:", err);
-                showToast('Нет доступа к камере');
-            }
-        }
-
-        function initScanner(cameraId) {
-            if (html5QrCode) {
-                html5QrCode.stop().then(() => {
-                    doInit(cameraId);
-                }).catch(() => {
-                    doInit(cameraId);
-                });
-            } else {
-                doInit(cameraId);
-            }
-        }
-
-        function doInit(cameraId) {
-            html5QrCode = new Html5Qrcode("reader");
-            const config = { 
-                fps: 25, 
-                qrbox: (viewfinderWidth, viewfinderHeight) => {
-                    const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-                    // Slightly smaller box can sometimes help with focus and processing
-                    const qrboxSize = Math.floor(minEdge * 0.75);
-                    return {
-                        width: qrboxSize,
-                        height: qrboxSize
-                    };
-                },
-                experimentalFeatures: {
-                    useBarCodeDetectorIfSupported: true
-                },
-                formatsToSupport: [
-                    Html5QrcodeSupportedFormats.QR_CODE,
-                    Html5QrcodeSupportedFormats.EAN_13,
-                    Html5QrcodeSupportedFormats.EAN_8,
-                    Html5QrcodeSupportedFormats.CODE_128,
-                    Html5QrcodeSupportedFormats.CODE_39,
-                    Html5QrcodeSupportedFormats.UPC_A,
-                    Html5QrcodeSupportedFormats.UPC_E,
-                    Html5QrcodeSupportedFormats.DATA_MATRIX,
-                    Html5QrcodeSupportedFormats.ITF,
-                    Html5QrcodeSupportedFormats.PDF_417
-                ]
-            };
-            
-            html5QrCode.start(
-                cameraId, 
-                config, 
-                (decodedText) => {
-                    const now = Date.now();
-                    
-                    if (isMassMode && decodedText === lastScannedCode && (now - lastScannedTime < 2000)) {
-                        return;
-                    }
-
-                    lastScannedCode = decodedText;
-                    lastScannedTime = now;
-
-                    if (navigator.vibrate) navigator.vibrate(100);
-                    
-                    if (isMassMode) {
-                        saveItem(decodedText, true);
-                        triggerFlash();
-                    } else {
-                        document.getElementById('scanned-input').value = decodedText;
-                        document.getElementById('result-view').classList.remove('hidden');
-                        html5QrCode.pause();
-                        showToast('Считано!');
-                    }
-                }
-            ).then(() => {
-                const capabilities = html5QrCode.getRunningTrackCapabilities();
-                if (capabilities.torch) {
-                    document.getElementById('torch-btn').classList.remove('hidden');
-                } else {
-                    document.getElementById('torch-btn').classList.add('hidden');
-                }
+                }).catch(() => setStatus({ type: 'error', msg: 'Камера не найдена' }));
                 
-                if (capabilities.zoom) {
-                    document.getElementById('zoom-container').classList.remove('hidden');
-                    const zoomInput = document.getElementById('zoom-range');
-                    zoomInput.min = capabilities.zoom.min;
-                    zoomInput.max = capabilities.zoom.max;
-                    zoomInput.step = capabilities.zoom.step;
-                    zoomInput.value = capabilities.zoom.min;
-                } else {
-                    document.getElementById('zoom-container').classList.add('hidden');
+                // Инициализация иконок Lucide
+                setTimeout(() => lucide.createIcons(), 100);
+            }, []);
+
+            // Запуск/Остановка сканера
+            useEffect(() => {
+                if (isScanning && camId) {
+                    const scanner = new Html5Qrcode("reader");
+                    scannerRef.current = scanner;
+                    
+                    scanner.start(camId, { 
+                        fps: 20, 
+                        qrbox: 250, 
+                        formatsToSupport: [Html5QrcodeSupportedFormats.DATA_MATRIX, Html5QrcodeSupportedFormats.QR_CODE] 
+                    }, 
+                    (text) => {
+                        setItems(prev => {
+                            if (prev.some(i => i.data === text)) return prev;
+                            if (navigator.vibrate) navigator.vibrate(70);
+                            return [{ data: text, time: new Date().toLocaleTimeString() }, ...prev];
+                        });
+                        setStatus({ type: 'success', msg: 'Считано!' });
+                    }, 
+                    () => {}).catch(() => setIsScanning(false));
+
+                    return () => {
+                        if (scannerRef.current && scannerRef.current.isScanning) {
+                            scannerRef.current.stop().catch(() => {});
+                        }
+                    };
                 }
-            }).catch(err => {
-                console.error("Scanner start error:", err);
-                showToast('Ошибка запуска: ' + err);
-            });
-        }
+            }, [isScanning, camId]);
 
-        async function switchCamera() {
-            if (cameras.length < 2) return;
-            const currentIndex = cameras.findIndex(c => c.id === currentCameraId);
-            const nextIndex = (currentIndex + 1) % cameras.length;
-            currentCameraId = cameras[nextIndex].id;
-            isTorchOn = false;
-            document.getElementById('torch-btn').classList.remove('bg-yellow-500', 'text-black');
-            document.getElementById('torch-btn').classList.add('bg-white/20', 'text-white');
-            initScanner(currentCameraId);
-        }
-
-        async function handleZoom(value) {
-            if (!html5QrCode) return;
-            try {
-                await html5QrCode.applyVideoConstraints({
-                    advanced: [{ zoom: parseFloat(value) }]
-                });
-            } catch (err) {
-                console.error("Zoom error:", err);
-            }
-        }
-
-        async function toggleTorch() {
-            if (!html5QrCode) return;
-            try {
-                isTorchOn = !isTorchOn;
-                await html5QrCode.applyVideoConstraints({
-                    advanced: [{ torch: isTorchOn }]
-                });
-                const btn = document.getElementById('torch-btn');
-                if (isTorchOn) {
-                    btn.classList.add('bg-yellow-500', 'text-black');
-                    btn.classList.remove('bg-white/20', 'text-white');
-                } else {
-                    btn.classList.remove('bg-yellow-500', 'text-black');
-                    btn.classList.add('bg-white/20', 'text-white');
+            const sendData = async () => {
+                if (!items.length) return;
+                setStatus({ type: 'loading', msg: 'Отправка...' });
+                try {
+                    await fetch(GOOGLE_SCRIPT_URL, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        body: JSON.stringify(items)
+                    });
+                    setItems([]);
+                    setStatus({ type: 'success', msg: 'Данные в таблице!' });
+                } catch (e) {
+                    setStatus({ type: 'error', msg: 'Ошибка сети' });
                 }
-            } catch (err) {
-                console.error("Torch error:", err);
-                showToast('Фонарик не поддерживается');
-                isTorchOn = false;
-            }
-        }
-
-        function triggerFlash() {
-            const flash = document.getElementById('flash-overlay');
-            flash.classList.remove('success-flash');
-            void flash.offsetWidth; // trigger reflow
-            flash.classList.add('success-flash');
-        }
-
-        function toggleMassMode() {
-            isMassMode = !isMassMode;
-            const btn = document.getElementById('mass-mode-btn');
-            if (isMassMode) {
-                btn.classList.add('bg-blue-600', 'text-white');
-                btn.classList.remove('bg-white/20', 'text-white');
-                showToast('Массовый режим ВКЛ');
-            } else {
-                btn.classList.remove('bg-blue-600');
-                btn.classList.add('bg-white/20');
-                showToast('Массовый режим ВЫКЛ');
-            }
-            updateCounter();
-        }
-
-        function cancelScan() {
-            document.getElementById('result-view').classList.add('hidden');
-            html5QrCode.resume();
-        }
-
-        function saveToInventory() {
-            const code = document.getElementById('scanned-input').value;
-            saveItem(code);
-            document.getElementById('result-view').classList.add('hidden');
-            html5QrCode.resume();
-        }
-
-        function saveItem(code, silent = false) {
-            if (!code) return;
-
-            const newItem = {
-                id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
-                timestamp: new Date().toLocaleString(),
-                code: code,
-                status: 'pending'
             };
 
-            inventory.unshift(newItem);
-            localStorage.setItem('warehouse_barcode_data', JSON.stringify(inventory));
-            
-            renderHistory();
-            updateCounter();
-            if (!silent) showToast('Сохранено!');
-        }
-
-        // --- History Logic ---
-        function renderHistory() {
-            const list = document.getElementById('history-list');
-            list.innerHTML = inventory.length === 0 
-                ? '<div class="text-center text-slate-400 py-10">Список пуст</div>'
-                : inventory.map(item => `
-                    <div class="bg-white border rounded-2xl p-4 shadow-sm flex flex-col gap-3">
-                        <div class="flex justify-between items-start">
-                            <div class="flex-1">
-                                <h3 class="font-mono font-bold text-lg break-all">${item.code}</h3>
-                                <p class="text-slate-400 text-[10px] uppercase">${item.timestamp}</p>
-                            </div>
-                            <div class="flex gap-1">
-                                <button onclick="copyToClipboard('${item.code}')" class="p-2 bg-slate-50 text-slate-500 rounded-lg hover:bg-slate-100">
-                                    <i data-lucide="copy" class="w-4 h-4"></i>
-                                </button>
-                                <div class="p-2 bg-slate-100 rounded-lg"><i data-lucide="barcode" class="text-slate-500 w-5 h-5"></i></div>
-                            </div>
+            return (
+                <div className="min-h-screen p-4 pb-32 max-w-md mx-auto">
+                    {/* Шапка */}
+                    <div className="flex justify-between items-center mb-8">
+                        <div className="flex items-center gap-2">
+                            <i data-lucide="box" class="text-blue-500 w-6 h-6"></i>
+                            <h1 className="text-2xl font-black uppercase italic tracking-tighter">BoxLog</h1>
                         </div>
-                        <div class="flex gap-2 pt-2 border-t">
-                            <button onclick="sendToSheets('${item.id}')" ${item.status === 'sent' ? 'disabled' : ''} 
-                                class="flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1 ${item.status === 'sent' ? 'bg-green-100 text-green-700' : 'bg-blue-50 text-blue-600'}">
-                                ${item.status === 'sent' ? '✓ Отправлено' : '↑ В таблицу'}
+                        <div className="flex gap-4">
+                            <button onClick={() => setItems([])} className="text-zinc-600 active:text-red-500 transition-colors">
+                                <i data-lucide="trash-2" class="w-6 h-6"></i>
                             </button>
-                            <button onclick="deleteItem('${item.id}')" class="p-2 bg-red-50 text-red-500 rounded-lg"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
                         </div>
                     </div>
-                `).join('');
-            lucide.createIcons();
+
+                    {/* Статус */}
+                    {status.msg && (
+                        <div className={`mb-6 p-4 rounded-2xl text-center text-xs font-black uppercase tracking-[0.2em] shadow-lg ${
+                            status.type === 'success' ? 'bg-green-600 shadow-green-900/20' : 
+                            status.type === 'error' ? 'bg-red-600 shadow-red-900/20' : 'bg-blue-600 shadow-blue-900/20'
+                        }`}>
+                            {status.msg}
+                        </div>
+                    )}
+
+                    {/* Сканер */}
+                    <div className="bg-zinc-800 rounded-[2.5rem] overflow-hidden border-4 border-zinc-800 shadow-2xl mb-8 relative">
+                        {!isScanning ? (
+                            <button onClick={() => setIsScanning(true)} className="w-full py-20 flex flex-col items-center gap-6">
+                                <div className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center shadow-xl shadow-blue-900/40 animate-pulse">
+                                    <i data-lucide="camera" class="w-10 h-10"></i>
+                                </div>
+                                <span className="font-black uppercase tracking-widest text-sm">Включить камеру</span>
+                            </button>
+                        ) : (
+                            <div className="p-2 relative">
+                                <div id="reader" className="rounded-3xl overflow-hidden aspect-square"></div>
+                                <div className="absolute inset-0 pointer-events-none border-2 border-blue-500/30 m-8 rounded-xl">
+                                    <div className="w-full h-0.5 bg-blue-500/50 animate-scan"></div>
+                                </div>
+                                <button onClick={() => setIsScanning(false)} className="w-full py-4 mt-2 text-zinc-500 font-bold text-xs uppercase tracking-widest">Выключить</button>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Список */}
+                    <div className="space-y-3">
+                        <div className="flex justify-between items-end px-2 mb-2">
+                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em]">Очередь</p>
+                            <p className="text-xs font-bold text-blue-500">{items.length} шт.</p>
+                        </div>
+                        {items.length === 0 ? (
+                            <div className="py-12 text-center border-2 border-dashed border-zinc-800 rounded-3xl">
+                                <p className="text-zinc-600 text-sm font-medium">Пусто. Жду сканирования...</p>
+                            </div>
+                        ) : (
+                            items.map((item, i) => (
+                                <div key={i} className="bg-zinc-800/50 p-5 rounded-3xl flex justify-between items-center border border-zinc-800 backdrop-blur-sm">
+                                    <div className="truncate pr-4">
+                                        <p className="font-mono text-sm text-blue-400 truncate font-bold">{item.data}</p>
+                                        <p className="text-[9px] text-zinc-600 font-black uppercase mt-1">{item.time}</p>
+                                    </div>
+                                    <i data-lucide="check-circle-2" class="text-green-500 w-6 h-6 shrink-0"></i>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    {/* Кнопка ОТПРАВИТЬ */}
+                    {items.length > 0 && (
+                        <div className="fixed bottom-8 left-6 right-6 z-50">
+                            <button 
+                                onClick={sendData}
+                                className="w-full py-6 bg-blue-600 rounded-3xl font-black text-lg uppercase tracking-widest shadow-2xl shadow-blue-900/60 active:scale-95 transition-transform flex items-center justify-center gap-4 border-b-4 border-blue-800"
+                            >
+                                <i data-lucide="send" class="w-6 h-6"></i>
+                                Отправить
+                            </button>
+                        </div>
+                    )}
+                </div>
+            );
         }
 
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                showToast('Скопировано!');
-            }).catch(err => {
-                showToast('Ошибка копирования');
-            });
-        }
-
-        function clearHistory() {
-            if (confirm('Вы уверены, что хотите очистить всю историю?')) {
-                inventory = [];
-                localStorage.setItem('warehouse_barcode_data', JSON.stringify(inventory));
-                renderHistory();
-                showToast('История очищена');
-            }
-        }
-
-        function downloadCSV() {
-            if (inventory.length === 0) {
-                showToast('История пуста');
-                return;
-            }
-            const headers = ['Timestamp', 'Barcode', 'Status'];
-            const rows = inventory.map(item => [item.timestamp, item.code, item.status]);
-            const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
-            
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            link.setAttribute("href", url);
-            link.setAttribute("download", `warehouse_history_${new Date().toISOString().split('T')[0]}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            showToast('CSV скачан');
-        }
-
-        async function sendToSheets(id) {
-            const item = inventory.find(i => i.id === id);
-            if (!item || !settings.googleScriptUrl) return;
-
-            showToast('Отправка...');
-            try {
-                await fetch(settings.googleScriptUrl, {
-                    method: 'POST',
-                    mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ timestamp: item.timestamp, code: item.code })
-                });
-                item.status = 'sent';
-                localStorage.setItem('warehouse_barcode_data', JSON.stringify(inventory));
-                renderHistory();
-                showToast('Успешно отправлено!');
-            } catch (err) {
-                showToast('Ошибка отправки');
-            }
-        }
-
-        function deleteItem(id) {
-            inventory = inventory.filter(i => i.id !== id);
-            localStorage.setItem('warehouse_barcode_data', JSON.stringify(inventory));
-            renderHistory();
-        }
-
-        // --- UI Toggles ---
-        function toggleHistory() {
-            const drawer = document.getElementById('history-drawer');
-            drawer.classList.toggle('translate-y-full');
-        }
-
-        function toggleSettings() {
-            const drawer = document.getElementById('settings-drawer');
-            drawer.classList.toggle('translate-x-full');
-        }
-
-        function saveSettings() {
-            settings.googleScriptUrl = document.getElementById('script-url-input').value;
-            localStorage.setItem('warehouse_barcode_settings', JSON.stringify(settings));
-            toggleSettings();
-            showToast('Настройки сохранены');
-        }
-
-        // --- Service Worker Registration ---
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js')
-                    .then(reg => console.log('SW registered'))
-                    .catch(err => console.log('SW registration failed', err));
-            });
-        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>
+
