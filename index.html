@@ -71,11 +71,26 @@
                 </div>
             </div>
 
+            <!-- Zoom Control -->
+            <div id="zoom-container" class="absolute bottom-32 left-0 right-0 px-12 hidden">
+                <div class="bg-black/40 backdrop-blur-md p-3 rounded-2xl flex items-center gap-4">
+                    <i data-lucide="zoom-out" class="text-white w-4 h-4"></i>
+                    <input type="range" id="zoom-range" class="flex-1 accent-blue-500" oninput="handleZoom(this.value)">
+                    <i data-lucide="zoom-in" class="text-white w-4 h-4"></i>
+                </div>
+            </div>
+
             <!-- Bottom Controls -->
-            <div class="absolute bottom-10 left-0 right-0 flex justify-center items-center gap-6 px-6">
+            <div class="absolute bottom-10 left-0 right-0 flex justify-center items-center gap-4 px-6">
                 <button id="mass-mode-btn" onclick="toggleMassMode()" class="p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all flex flex-col items-center gap-1">
                     <i data-lucide="layers" size="24"></i>
                     <span class="text-[10px] uppercase font-bold">Массово</span>
+                </button>
+                <button id="torch-btn" onclick="toggleTorch()" class="hidden p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all">
+                    <i data-lucide="zap" size="28"></i>
+                </button>
+                <button id="switch-camera-btn" onclick="switchCamera()" class="hidden p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all">
+                    <i data-lucide="refresh-cw" size="28"></i>
                 </button>
                 <button onclick="toggleHistory()" class="p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all">
                     <i data-lucide="history" size="28"></i>
@@ -153,6 +168,9 @@
         let isMassMode = false;
         let lastScannedCode = null;
         let lastScannedTime = 0;
+        let isTorchOn = false;
+        let currentCameraId = null;
+        let cameras = [];
 
         // --- Initialization ---
         window.onload = () => {
@@ -182,19 +200,53 @@
         }
 
         // --- Scanner Logic ---
-        function startScanner() {
+        async function startScanner() {
+            try {
+                cameras = await Html5Qrcode.getCameras();
+                if (cameras && cameras.length > 0) {
+                    // Try to find back camera
+                    const backCamera = cameras.find(c => c.label.toLowerCase().includes('back') || c.label.toLowerCase().includes('rear') || c.label.toLowerCase().includes('0'));
+                    currentCameraId = backCamera ? backCamera.id : cameras[0].id;
+                    
+                    if (cameras.length > 1) {
+                        document.getElementById('switch-camera-btn').classList.remove('hidden');
+                    }
+                    
+                    initScanner(currentCameraId);
+                } else {
+                    showToast('Камеры не найдены');
+                }
+            } catch (err) {
+                console.error("Camera access error:", err);
+                showToast('Нет доступа к камере');
+            }
+        }
+
+        function initScanner(cameraId) {
+            if (html5QrCode) {
+                html5QrCode.stop().then(() => {
+                    doInit(cameraId);
+                }).catch(() => {
+                    doInit(cameraId);
+                });
+            } else {
+                doInit(cameraId);
+            }
+        }
+
+        function doInit(cameraId) {
             html5QrCode = new Html5Qrcode("reader");
             const config = { 
-                fps: 20, 
+                fps: 25, 
                 qrbox: (viewfinderWidth, viewfinderHeight) => {
                     const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-                    const qrboxSize = Math.floor(minEdge * 0.8);
+                    // Slightly smaller box can sometimes help with focus and processing
+                    const qrboxSize = Math.floor(minEdge * 0.75);
                     return {
                         width: qrboxSize,
                         height: qrboxSize
                     };
                 },
-                aspectRatio: 1.0,
                 experimentalFeatures: {
                     useBarCodeDetectorIfSupported: true
                 },
@@ -206,17 +258,18 @@
                     Html5QrcodeSupportedFormats.CODE_39,
                     Html5QrcodeSupportedFormats.UPC_A,
                     Html5QrcodeSupportedFormats.UPC_E,
-                    Html5QrcodeSupportedFormats.DATA_MATRIX
+                    Html5QrcodeSupportedFormats.DATA_MATRIX,
+                    Html5QrcodeSupportedFormats.ITF,
+                    Html5QrcodeSupportedFormats.PDF_417
                 ]
             };
             
             html5QrCode.start(
-                { facingMode: "environment" }, 
+                cameraId, 
                 config, 
                 (decodedText) => {
                     const now = Date.now();
                     
-                    // Prevent duplicate scans of the same code within 2 seconds in mass mode
                     if (isMassMode && decodedText === lastScannedCode && (now - lastScannedTime < 2000)) {
                         return;
                     }
@@ -227,21 +280,81 @@
                     if (navigator.vibrate) navigator.vibrate(100);
                     
                     if (isMassMode) {
-                        // Auto-save in mass mode
                         saveItem(decodedText, true);
                         triggerFlash();
                     } else {
-                        // Manual mode
                         document.getElementById('scanned-input').value = decodedText;
                         document.getElementById('result-view').classList.remove('hidden');
                         html5QrCode.pause();
                         showToast('Считано!');
                     }
                 }
-            ).catch(err => {
-                console.error("Scanner error:", err);
-                showToast('Ошибка камеры: ' + err);
+            ).then(() => {
+                const capabilities = html5QrCode.getRunningTrackCapabilities();
+                if (capabilities.torch) {
+                    document.getElementById('torch-btn').classList.remove('hidden');
+                } else {
+                    document.getElementById('torch-btn').classList.add('hidden');
+                }
+                
+                if (capabilities.zoom) {
+                    document.getElementById('zoom-container').classList.remove('hidden');
+                    const zoomInput = document.getElementById('zoom-range');
+                    zoomInput.min = capabilities.zoom.min;
+                    zoomInput.max = capabilities.zoom.max;
+                    zoomInput.step = capabilities.zoom.step;
+                    zoomInput.value = capabilities.zoom.min;
+                } else {
+                    document.getElementById('zoom-container').classList.add('hidden');
+                }
+            }).catch(err => {
+                console.error("Scanner start error:", err);
+                showToast('Ошибка запуска: ' + err);
             });
+        }
+
+        async function switchCamera() {
+            if (cameras.length < 2) return;
+            const currentIndex = cameras.findIndex(c => c.id === currentCameraId);
+            const nextIndex = (currentIndex + 1) % cameras.length;
+            currentCameraId = cameras[nextIndex].id;
+            isTorchOn = false;
+            document.getElementById('torch-btn').classList.remove('bg-yellow-500', 'text-black');
+            document.getElementById('torch-btn').classList.add('bg-white/20', 'text-white');
+            initScanner(currentCameraId);
+        }
+
+        async function handleZoom(value) {
+            if (!html5QrCode) return;
+            try {
+                await html5QrCode.applyVideoConstraints({
+                    advanced: [{ zoom: parseFloat(value) }]
+                });
+            } catch (err) {
+                console.error("Zoom error:", err);
+            }
+        }
+
+        async function toggleTorch() {
+            if (!html5QrCode) return;
+            try {
+                isTorchOn = !isTorchOn;
+                await html5QrCode.applyVideoConstraints({
+                    advanced: [{ torch: isTorchOn }]
+                });
+                const btn = document.getElementById('torch-btn');
+                if (isTorchOn) {
+                    btn.classList.add('bg-yellow-500', 'text-black');
+                    btn.classList.remove('bg-white/20', 'text-white');
+                } else {
+                    btn.classList.remove('bg-yellow-500', 'text-black');
+                    btn.classList.add('bg-white/20', 'text-white');
+                }
+            } catch (err) {
+                console.error("Torch error:", err);
+                showToast('Фонарик не поддерживается');
+                isTorchOn = false;
+            }
         }
 
         function triggerFlash() {
