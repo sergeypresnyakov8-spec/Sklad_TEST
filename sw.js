@@ -3,7 +3,10 @@ const ASSETS = [
   './',
   'index.html',
   'manifest.json',
-  'sw.js'
+  'sw.js',
+  'https://cdn.tailwindcss.com',
+  'https://unpkg.com/lucide@latest',
+  'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js'
 ];
 
 self.addEventListener('install', (event) => {
