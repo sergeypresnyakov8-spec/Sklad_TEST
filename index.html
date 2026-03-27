@@ -29,6 +29,14 @@
         #reader__dashboard, #reader__header_message { display: none !important; }
         #reader { border: none !important; }
         video { border-radius: 1rem; object-fit: cover !important; }
+
+        .success-flash {
+            animation: flash 0.5s ease-out;
+        }
+        @keyframes flash {
+            0% { background-color: rgba(34, 197, 94, 0.5); }
+            100% { background-color: transparent; }
+        }
     </style>
 </head>
 <body class="bg-slate-100 font-sans text-slate-900 h-screen overflow-hidden">
@@ -37,6 +45,9 @@
         <!-- Scanner View -->
         <div id="scanner-view" class="flex-1 bg-black relative flex flex-col">
             <div id="reader" class="flex-1"></div>
+            
+            <!-- Success Flash Overlay -->
+            <div id="flash-overlay" class="absolute inset-0 pointer-events-none z-10"></div>
             
             <!-- Scanner Overlay -->
             <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -49,14 +60,23 @@
                 </div>
             </div>
 
-            <div class="absolute top-10 left-0 right-0 text-center">
+            <div class="absolute top-10 left-0 right-0 text-center space-y-2">
                 <p class="text-white bg-black/50 inline-block px-4 py-2 rounded-full backdrop-blur-md text-sm">
                     Наведите на штрихкод
                 </p>
+                <div id="scan-counter" class="hidden">
+                    <p class="text-white bg-blue-600/80 inline-block px-4 py-1 rounded-full backdrop-blur-md text-xs font-bold">
+                        Собрано: <span id="counter-value">0</span>
+                    </p>
+                </div>
             </div>
 
             <!-- Bottom Controls -->
-            <div class="absolute bottom-10 left-0 right-0 flex justify-center items-center gap-8 px-6">
+            <div class="absolute bottom-10 left-0 right-0 flex justify-center items-center gap-6 px-6">
+                <button id="mass-mode-btn" onclick="toggleMassMode()" class="p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all flex flex-col items-center gap-1">
+                    <i data-lucide="layers" size="24"></i>
+                    <span class="text-[10px] uppercase font-bold">Массово</span>
+                </button>
                 <button onclick="toggleHistory()" class="p-4 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30 transition-all">
                     <i data-lucide="history" size="28"></i>
                 </button>
@@ -130,6 +150,9 @@
         let inventory = JSON.parse(localStorage.getItem('warehouse_barcode_data') || '[]');
         let settings = JSON.parse(localStorage.getItem('warehouse_barcode_settings') || '{"googleScriptUrl": "https://script.google.com/macros/s/AKfycby89vxU7RQMNnGJlcVYg3NDIiB2AMvmsRNyf6KuF_fCaZtytMdieOhuh1hs0z6oqgxNbQ/exec"}');
         let html5QrCode;
+        let isMassMode = false;
+        let lastScannedCode = null;
+        let lastScannedTime = 0;
 
         // --- Initialization ---
         window.onload = () => {
@@ -137,6 +160,7 @@
             document.getElementById('script-url-input').value = settings.googleScriptUrl;
             startScanner();
             renderHistory();
+            updateCounter();
         };
 
         function showToast(message) {
@@ -144,6 +168,17 @@
             toast.textContent = message;
             toast.style.opacity = '1';
             setTimeout(() => toast.style.opacity = '0', 3000);
+        }
+
+        function updateCounter() {
+            const counter = document.getElementById('scan-counter');
+            const value = document.getElementById('counter-value');
+            if (isMassMode) {
+                counter.classList.remove('hidden');
+                value.textContent = inventory.length;
+            } else {
+                counter.classList.add('hidden');
+            }
         }
 
         // --- Scanner Logic ---
@@ -179,16 +214,56 @@
                 { facingMode: "environment" }, 
                 config, 
                 (decodedText) => {
-                    if (navigator.vibrate) navigator.vibrate(200);
-                    document.getElementById('scanned-input').value = decodedText;
-                    document.getElementById('result-view').classList.remove('hidden');
-                    html5QrCode.pause();
-                    showToast('Считано!');
+                    const now = Date.now();
+                    
+                    // Prevent duplicate scans of the same code within 2 seconds in mass mode
+                    if (isMassMode && decodedText === lastScannedCode && (now - lastScannedTime < 2000)) {
+                        return;
+                    }
+
+                    lastScannedCode = decodedText;
+                    lastScannedTime = now;
+
+                    if (navigator.vibrate) navigator.vibrate(100);
+                    
+                    if (isMassMode) {
+                        // Auto-save in mass mode
+                        saveItem(decodedText, true);
+                        triggerFlash();
+                    } else {
+                        // Manual mode
+                        document.getElementById('scanned-input').value = decodedText;
+                        document.getElementById('result-view').classList.remove('hidden');
+                        html5QrCode.pause();
+                        showToast('Считано!');
+                    }
                 }
             ).catch(err => {
                 console.error("Scanner error:", err);
                 showToast('Ошибка камеры: ' + err);
             });
+        }
+
+        function triggerFlash() {
+            const flash = document.getElementById('flash-overlay');
+            flash.classList.remove('success-flash');
+            void flash.offsetWidth; // trigger reflow
+            flash.classList.add('success-flash');
+        }
+
+        function toggleMassMode() {
+            isMassMode = !isMassMode;
+            const btn = document.getElementById('mass-mode-btn');
+            if (isMassMode) {
+                btn.classList.add('bg-blue-600', 'text-white');
+                btn.classList.remove('bg-white/20', 'text-white');
+                showToast('Массовый режим ВКЛ');
+            } else {
+                btn.classList.remove('bg-blue-600');
+                btn.classList.add('bg-white/20');
+                showToast('Массовый режим ВЫКЛ');
+            }
+            updateCounter();
         }
 
         function cancelScan() {
@@ -198,10 +273,16 @@
 
         function saveToInventory() {
             const code = document.getElementById('scanned-input').value;
+            saveItem(code);
+            document.getElementById('result-view').classList.add('hidden');
+            html5QrCode.resume();
+        }
+
+        function saveItem(code, silent = false) {
             if (!code) return;
 
             const newItem = {
-                id: Date.now().toString(),
+                id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
                 timestamp: new Date().toLocaleString(),
                 code: code,
                 status: 'pending'
@@ -210,10 +291,9 @@
             inventory.unshift(newItem);
             localStorage.setItem('warehouse_barcode_data', JSON.stringify(inventory));
             
-            document.getElementById('result-view').classList.add('hidden');
-            html5QrCode.resume();
             renderHistory();
-            showToast('Сохранено!');
+            updateCounter();
+            if (!silent) showToast('Сохранено!');
         }
 
         // --- History Logic ---
