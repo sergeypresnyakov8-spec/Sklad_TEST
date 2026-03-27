@@ -30,93 +30,73 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // ВАША ССЫЛКА НА GOOGLE SCRIPT
         const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzcje13UROSPJ5Oga_YIFFSTneyo0BYUVdV6crbanrUWFiOMGMqbrXL2Zg9JVU1D83JUg/exec';
 
         function App() {
             const [items, setItems] = useState([]);
             const [isScanning, setIsScanning] = useState(false);
             const [status, setStatus] = useState({ type: 'idle', msg: '' });
-            const [camId, setCamId] = useState(null);
             const scannerRef = useRef(null);
 
-            // Инициализация камер
             useEffect(() => {
-                const initCams = async () => {
-                    try {
-                        const cams = await Html5Qrcode.getCameras();
-                        if (cams.length > 0) {
-                            // Ищем заднюю камеру
-                            const back = cams.find(c => /back|rear|задняя|environment/i.test(c.label));
-                            setCamId(back ? back.id : cams[0].id);
-                        } else {
-                            setStatus({ type: 'error', msg: 'Камеры не найдены. Проверьте разрешения.' });
-                        }
-                    } catch (err) {
-                        console.error(err);
-                        setStatus({ type: 'error', msg: 'Ошибка доступа к камере. Откройте в новой вкладке.' });
-                    }
-                };
-                
-                initCams();
-                
-                // Инициализация иконок Lucide
                 setTimeout(() => lucide.createIcons(), 100);
             }, []);
 
-            // Запуск/Остановка сканера
+            // Логика запуска сканера
             useEffect(() => {
-                let scanner = null;
-                if (isScanning && camId) {
-                    scanner = new Html5Qrcode("reader");
-                    scannerRef.current = scanner;
-                    
-                    scanner.start(camId, { 
+                if (isScanning) {
+                    const html5QrCode = new Html5Qrcode("reader");
+                    scannerRef.current = html5QrCode;
+
+                    const config = { 
                         fps: 20, 
-                        qrbox: 250, 
-                        formatsToSupport: [Html5QrcodeSupportedFormats.DATA_MATRIX, Html5QrcodeSupportedFormats.QR_CODE] 
-                    }, 
-                    (text) => {
-                        setItems(prev => {
-                            if (prev.some(i => i.data === text)) return prev;
-                            if (navigator.vibrate) navigator.vibrate(70);
-                            return [{ data: text, time: new Date().toLocaleTimeString() }, ...prev];
+                        qrbox: { width: 250, height: 250 },
+                        aspectRatio: 1.0
+                    };
+
+                    // Используем facingMode для мобильных устройств
+                    html5QrCode.start(
+                        { facingMode: "environment" }, 
+                        config, 
+                        (text) => {
+                            setItems(prev => {
+                                if (prev.some(i => i.data === text)) return prev;
+                                if (navigator.vibrate) navigator.vibrate(70);
+                                return [{ data: text, time: new Date().toLocaleTimeString() }, ...prev];
+                            });
+                            setStatus({ type: 'success', msg: 'Код считан!' });
+                        },
+                        () => {} // Игнорируем ошибки сканирования кадра
+                    ).catch(err => {
+                        console.error("Camera start error:", err);
+                        // Если "environment" не сработал, пробуем любой доступный источник
+                        html5QrCode.start(
+                            { facingMode: "user" }, 
+                            config, 
+                            (text) => {
+                                setItems(prev => {
+                                    if (prev.some(i => i.data === text)) return prev;
+                                    return [{ data: text, time: new Date().toLocaleTimeString() }, ...prev];
+                                });
+                            },
+                            () => {}
+                        ).catch(err2 => {
+                            setStatus({ type: 'error', msg: 'Доступ к камере запрещен или она занята' });
+                            setIsScanning(false);
                         });
-                        setStatus({ type: 'success', msg: 'Считано!' });
-                    }, 
-                    (errorMessage) => {
-                        // Игнорируем ошибки сканирования кадра
-                    }).catch((err) => {
-                        console.error(err);
-                        setStatus({ type: 'error', msg: 'Не удалось запустить камеру. Попробуйте другую.' });
-                        setIsScanning(false);
                     });
-                }
 
-                return () => {
-                    if (scanner && scanner.isScanning) {
-                        scanner.stop().catch(e => console.error("Stop error", e));
-                    }
-                };
-            }, [isScanning, camId]);
-
-            const switchCamera = async () => {
-                try {
-                    const cams = await Html5Qrcode.getCameras();
-                    if (cams.length > 1) {
-                        const currentIndex = cams.findIndex(c => c.id === camId);
-                        const nextIndex = (currentIndex + 1) % cams.length;
-                        setCamId(cams[nextIndex].id);
-                        setStatus({ type: 'idle', msg: `Камера: ${cams[nextIndex].label || 'Переключена'}` });
-                    }
-                } catch (e) {
-                    setStatus({ type: 'error', msg: 'Не удалось переключить камеру' });
+                    return () => {
+                        if (scannerRef.current) {
+                            scannerRef.current.stop().catch(e => console.error("Stop error", e));
+                        }
+                    };
                 }
-            };
+            }, [isScanning]);
 
             const sendData = async () => {
                 if (!items.length) return;
-                setStatus({ type: 'loading', msg: 'Отправка...' });
+                setStatus({ type: 'loading', msg: 'Отправка в таблицу...' });
                 try {
                     await fetch(GOOGLE_SCRIPT_URL, {
                         method: 'POST',
@@ -124,9 +104,9 @@
                         body: JSON.stringify(items)
                     });
                     setItems([]);
-                    setStatus({ type: 'success', msg: 'Данные в таблице!' });
+                    setStatus({ type: 'success', msg: 'Данные успешно отправлены!' });
                 } catch (e) {
-                    setStatus({ type: 'error', msg: 'Ошибка сети' });
+                    setStatus({ type: 'error', msg: 'Ошибка при отправке' });
                 }
             };
 
@@ -136,25 +116,23 @@
 
             return (
                 <div className="min-h-screen p-4 pb-32 max-w-md mx-auto">
-                    {/* Шапка */}
                     <div className="flex justify-between items-center mb-8">
                         <div className="flex items-center gap-2">
                             <i data-lucide="box" class="text-blue-500 w-6 h-6"></i>
                             <h1 className="text-2xl font-black uppercase italic tracking-tighter">BoxLog</h1>
                         </div>
                         <div className="flex gap-4">
-                            <button onClick={openInNewTab} className="text-zinc-600 active:text-blue-500 transition-colors" title="Открыть в новой вкладке">
-                                <i data-lucide="external-link" class="w-6 h-6"></i>
+                            <button onClick={openInNewTab} className="p-2 bg-zinc-800 rounded-xl text-zinc-400 active:text-blue-500 transition-colors">
+                                <i data-lucide="external-link" class="w-5 h-5"></i>
                             </button>
-                            <button onClick={() => setItems([])} className="text-zinc-600 active:text-red-500 transition-colors" title="Очистить список">
-                                <i data-lucide="trash-2" class="w-6 h-6"></i>
+                            <button onClick={() => setItems([])} className="p-2 bg-zinc-800 rounded-xl text-zinc-400 active:text-red-500 transition-colors">
+                                <i data-lucide="trash-2" class="w-5 h-5"></i>
                             </button>
                         </div>
                     </div>
 
-                    {/* Статус */}
                     {status.msg && (
-                        <div className={`mb-6 p-4 rounded-2xl text-center text-xs font-black uppercase tracking-[0.2em] shadow-lg ${
+                        <div className={`mb-6 p-4 rounded-2xl text-center text-[10px] font-black uppercase tracking-[0.2em] shadow-lg animate-in fade-in slide-in-from-top-2 ${
                             status.type === 'success' ? 'bg-green-600 shadow-green-900/20' : 
                             status.type === 'error' ? 'bg-red-600 shadow-red-900/20' : 'bg-blue-600 shadow-blue-900/20'
                         }`}>
@@ -162,33 +140,70 @@
                         </div>
                     )}
 
-                    {/* Сканер */}
                     <div className="bg-zinc-800 rounded-[2.5rem] overflow-hidden border-4 border-zinc-800 shadow-2xl mb-8 relative">
                         {!isScanning ? (
-                            <button onClick={() => setIsScanning(true)} className="w-full py-20 flex flex-col items-center gap-6">
-                                <div className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center shadow-xl shadow-blue-900/40 animate-pulse">
+                            <button onClick={() => setIsScanning(true)} className="w-full py-24 flex flex-col items-center gap-6 active:scale-95 transition-transform">
+                                <div className="w-20 h-20 bg-blue-600 rounded-full flex items-center justify-center shadow-xl shadow-blue-900/40">
                                     <i data-lucide="camera" class="w-10 h-10"></i>
                                 </div>
-                                <span className="font-black uppercase tracking-widest text-sm">Включить камеру</span>
+                                <span className="font-black uppercase tracking-widest text-xs opacity-60">Нажмите для сканирования</span>
                             </button>
                         ) : (
                             <div className="p-2 relative">
-                                <div id="reader" className="rounded-3xl overflow-hidden aspect-square"></div>
-                                <div className="absolute inset-0 pointer-events-none border-2 border-blue-500/30 m-8 rounded-xl">
+                                <div id="reader" className="rounded-3xl overflow-hidden aspect-square bg-black"></div>
+                                <div className="absolute inset-0 pointer-events-none border-2 border-blue-500/30 m-12 rounded-xl">
                                     <div className="w-full h-0.5 bg-blue-500/50 animate-scan"></div>
                                 </div>
-                                <div className="flex gap-2 mt-2">
-                                    <button onClick={switchCamera} className="flex-1 py-4 bg-zinc-700/50 rounded-2xl text-zinc-300 font-bold text-[10px] uppercase tracking-widest flex items-center justify-center gap-2">
-                                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-                                        Сменить камеру
-                                    </button>
-                                    <button onClick={() => setIsScanning(false)} className="flex-1 py-4 bg-zinc-700/50 rounded-2xl text-zinc-300 font-bold text-[10px] uppercase tracking-widest">
-                                        Выключить
-                                    </button>
-                                </div>
+                                <button onClick={() => setIsScanning(false)} className="w-full py-4 mt-2 bg-zinc-700/30 rounded-2xl text-zinc-400 font-black text-[10px] uppercase tracking-widest">
+                                    Остановить камеру
+                                </button>
                             </div>
                         )}
                     </div>
+
+                    <div className="space-y-3">
+                        <div className="flex justify-between items-end px-2 mb-2">
+                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.3em]">Отсканировано</p>
+                            <p className="text-xs font-bold text-blue-500">{items.length}</p>
+                        </div>
+                        
+                        {items.length === 0 ? (
+                            <div className="py-16 text-center border-2 border-dashed border-zinc-800 rounded-[2rem]">
+                                <p className="text-zinc-600 text-xs font-bold uppercase tracking-widest">Список пуст</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {items.map((item, i) => (
+                                    <div key={i} className="bg-zinc-800/40 p-5 rounded-3xl flex justify-between items-center border border-zinc-800/50 animate-in slide-in-from-left-2">
+                                        <div className="truncate pr-4">
+                                            <p className="font-mono text-sm text-blue-400 truncate font-bold">{item.data}</p>
+                                            <p className="text-[9px] text-zinc-600 font-black uppercase mt-1">{item.time}</p>
+                                        </div>
+                                        <i data-lucide="check" class="text-green-500 w-5 h-5 shrink-0"></i>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {items.length > 0 && (
+                        <div className="fixed bottom-8 left-6 right-6 z-50">
+                            <button 
+                                onClick={sendData}
+                                className="w-full py-6 bg-blue-600 rounded-[2rem] font-black text-sm uppercase tracking-[0.2em] shadow-2xl shadow-blue-900/60 active:scale-95 transition-transform flex items-center justify-center gap-3 border-b-4 border-blue-800"
+                            >
+                                <i data-lucide="send" class="w-5 h-5"></i>
+                                Отправить в таблицу
+                            </button>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 
                     {/* Список */}
                     <div className="space-y-3">
